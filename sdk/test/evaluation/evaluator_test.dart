@@ -304,31 +304,29 @@ void main() {
     });
 
     test('experiment uses seed field (not key) for hashing', () {
-      // Two configs: same clientCode, same experiment key, but different seeds.
-      // With weight [1.0] result is always var 0 regardless — so test that
-      // changing seed doesn't break anything.
-      final configA = _configWithExperiment(seed: 'seed_a', weights: [1.0],
-          variations: [const Variation(key: 'control', value: false)]);
-      final configB = _configWithExperiment(seed: 'seed_b', weights: [1.0],
-          variations: [const Variation(key: 'control', value: false)]);
+      // Two configs share the same experiment key ("test_exp") but use
+      // different seeds. If the evaluator were incorrectly hashing the key
+      // instead of the seed, computeBucket would return identical values.
+      // The seeds produce different hash inputs:
+      //   configA: "seed_a:AB1234"   configB: "seed_b:AB1234"
+      final configA = _configWithExperiment(
+        expKey: 'test_exp',
+        seed: 'seed_a',
+        coverage: 1.0,
+      );
+      final configB = _configWithExperiment(
+        expKey: 'test_exp',
+        seed: 'seed_b',
+        coverage: 1.0,
+      );
 
-      // Both return non-null (100% coverage, weight=1.0).
-      expect(
-        _evaluator.evaluateExperiment(
-          experimentKey: 'test_exp',
-          clientCode: 'AB1234',
-          config: configA,
-        ),
-        isNotNull,
-      );
-      expect(
-        _evaluator.evaluateExperiment(
-          experimentKey: 'test_exp',
-          clientCode: 'AB1234',
-          config: configB,
-        ),
-        isNotNull,
-      );
+      final bucketA = _evaluator.computeBucket('test_exp', 'AB1234', configA);
+      final bucketB = _evaluator.computeBucket('test_exp', 'AB1234', configB);
+
+      // Buckets must differ — proof that seed (not key) is the hash input.
+      // P(false failure) = 1/10000.
+      expect(bucketA, isNot(equals(bucketB)),
+          reason: 'Changing only the seed must change the bucket');
     });
   });
 
