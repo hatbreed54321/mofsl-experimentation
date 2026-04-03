@@ -3,7 +3,7 @@
 > This document is the single source of truth for all decisions made during this project.
 > Paste this at the start of every new Claude chat session to restore full context.
 > Append new decisions to the relevant section as phases are completed.
-> **Current state: Phase 6 complete. Ready to plan Phase 7 — SDK Development.**
+> **Current state: Phase 7A complete. Phase 7B (evaluation engine + exposure tracker + client) is next.**
 
 ---
 
@@ -263,7 +263,8 @@ All ADRs are written and stored in `architecture/adr/`. Summary:
 - [x] Phase 4 — Architecture Design
 - [x] Phase 5 — CLAUDE.md & Skill Creation
 - [x] Phase 6 — Client Targeting Ingestion Pipeline
-- [ ] Phase 7 — SDK Development (Flutter) *(next)*
+- [~] Phase 7 — SDK Development (Flutter) — 7A complete, 7B next
+  - [x] Phase 7A — Package scaffold, data models, config cache, config loader, logger, version, tests (27 test cases)
 - [ ] Phase 8 — Backend / Control Plane
 - [ ] Phase 9 — Data Plane & Stats Engine
 - [ ] Phase 10 — Internal Dashboard
@@ -475,4 +476,39 @@ Note: `getEligibleExperimentIds` was removed — it had no callers and would hav
 
 ---
 
-*Last updated: Phase 6 complete. Ready for Phase 7 — SDK Development (Flutter/Dart).*
+---
+
+## 16. Phase 7A Decisions & What 7B Needs to Know
+
+### Package: `mofsl_experiment` (resolved)
+- Package name: `mofsl_experiment` (not `mofsl_sdk`, not `riise_experiments`)
+- Distribution: git package for now (`path:` dep in host app during dev, later pub.dev or private server)
+- Pure Dart, no Flutter widget imports, no `dart:io`
+
+### Data model decisions (locked — do not change)
+- `Variation.value` is `dynamic` — handles bool/String/int/Map uniformly across experiment types
+- `Experiment.seed` defaults to `experiment.key` when `seed` field is absent from JSON
+- `SdkConfig.forcedVariations` contains **server-side** forced variations (from config payload). **Client-side** forced variations are passed via `initialize(forcedVariations: {...})` and override server-side ones.
+- ETag stored as raw version string (not quoted). The `If-None-Match` header adds quotes: `'"$etag"'`
+
+### Config layer decisions (locked)
+- `ConfigCache` takes `SharedPreferences` instance via constructor (not a static wrapper) — required for testability
+- `ConfigLoader.fetch()` is the only public method — no separate "load from cache" — callers get `SdkConfig?`
+- `unawaited(_cache.save(...))` — cache write never blocks the fetch return path
+- `TimeoutException` caught separately from general `Exception` so the log message is specific
+
+### What 7B must implement (evaluation + exposure + client)
+- `lib/src/evaluation/hasher.dart` — MurmurHash3 x86 32-bit, pure Dart, 32-bit overflow via `& 0xFFFFFFFF`
+- `lib/src/evaluation/bucket_mapper.dart` — cumulative weight walk to map bucket → `Variation`
+- `lib/src/evaluation/evaluator.dart` — full 7-step algorithm from `CONFIG_SERVER_API.md` Section 3
+- `lib/src/exposure/exposure_tracker.dart` — dedup `Set<String>`, fires callback, tracks per-session
+- `lib/src/client.dart` — `MofslExperiment` class: static `initialize()`, `getBool/String/Int/JSON()`, `refresh()`, `dispose()`
+- `lib/mofsl_experiment.dart` — add `MofslExperiment` export
+
+### Phase 7B test coverage required
+- Hasher: known-input → known-hash vectors; chi-square uniformity over 100K inputs
+- Evaluator: forced variation, paused experiment, coverage exclusion, each variation band, missing experiment, flag evaluation
+- Exposure tracker: dedup (second call no-op), forced variation no fire, coverage exclusion no fire
+- Client: full `initialize()` lifecycle, `getBool/String/Int/JSON` with defaults, `dispose()` cancels timer
+
+*Last updated: Phase 7A complete. Ready for Phase 7B — evaluation engine, exposure tracker, MofslExperiment client.*
