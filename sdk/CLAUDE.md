@@ -198,12 +198,14 @@ Track fired experiments in a `Set<String> _firedExposures` field on the client. 
 
 ## Dart Conventions for This Package
 
-- **Pure Dart only** — no Flutter-specific imports except `shared_preferences` for caching
+- **Flutter package** — `pubspec.yaml` declares `flutter: sdk: flutter` and `flutter_test: sdk: flutter` because `shared_preferences` transitively depends on `dart:ui`. Run tests with `flutter test`, NOT `dart test`.
+- **No Flutter widget imports** — no widgets, no rendering, no platform channels. Flutter SDK is a dependency only because of `shared_preferences`.
 - **No native platform code** — no method channels, no platform-specific implementations
 - **Null safety** — fully null-safe, no `!` operators (use explicit null checks)
 - **Immutable models** — all data classes use `final` fields and `const` constructors where possible
 - **No code generation** — no `build_runner`, no `json_serializable`, no `freezed`. Hand-write JSON parsing.
-- **Minimal dependencies:** only `http`, `shared_preferences`, `crypto` (for ETag hash if needed)
+- **No mockito** — use `FakeHttpClient extends http.BaseClient` and override `send()`. No code generation needed for HTTP faking.
+- **Minimal dependencies:** only `http`, `shared_preferences` (+ Flutter SDK transitively)
 - **Lint rules:** use `package:lints/recommended.yaml` as base, add `prefer_const_constructors`, `avoid_dynamic_calls`
 
 ---
@@ -266,9 +268,33 @@ When `debugMode: false` (production default):
 ## What NOT To Do in This Module
 
 - **Never add event transport** — no HTTP calls for sending events, no batching, no retry queues. The `onExposure` callback is the only output.
-- **Never import Flutter widgets** — this is a pure Dart package, not a Flutter widget library
+- **Never import Flutter widgets** — no widgets, no rendering. Flutter is a transitive dep only.
 - **Never use `dart:io` directly** — use the `http` package for HTTP calls (works on all platforms)
 - **Never use `dart:mirrors`** — not supported in Flutter AOT compilation
 - **Never assume platform** — the SDK runs on Android, iOS, web, macOS, Windows, Linux
 - **Never store the API key in SharedPreferences** — it's passed at initialization and held in memory only
 - **Never modify the evaluation algorithm** without updating `CONFIG_SERVER_API.md` — the server and SDK must agree on bucketing logic
+- **Never run `dart test`** — always use `flutter test`. `dart test` fails because `shared_preferences` requires `dart:ui`.
+- **Never add `mockito` or `build_runner`** — use `FakeHttpClient extends http.BaseClient` instead.
+
+---
+
+## Implementation Log — Mistakes & Learnings
+
+> SDK-specific mistakes. See root `CLAUDE.md` for project-wide log.
+
+### Phase 7A — SDK Foundation
+
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `expect(() async => cache.clear(), returnsNormally)` always passed even when `clear()` would fail | `returnsNormally` only checks synchronous throw; the `Future`'s failure is never observed | Never use `returnsNormally` with async functions — use `await fn()` directly or `await expectLater(fn(), completes)` |
+| 2 | Test named "returns null for invalid JSON body" asserted `isNotNull` | Copy-paste of test name without updating it | Test name must match the assertion exactly |
+
+### Phase 7B — Evaluation Engine & Public API
+
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `dart test` failed: `dart:ui not available on this platform` | `shared_preferences` chains to `dart:ui` via Flutter; pubspec had no Flutter SDK constraint | Declare `flutter: '>=3.0.0'` in environment, `flutter: sdk: flutter` in dependencies, `flutter_test: sdk: flutter` in dev_dependencies. Always run `flutter test`. |
+| 2 | `avoid_dynamic_calls` lint on `'value=$flagValue'` in debug log | String interpolation on `dynamic` implicitly calls `.toString()`, which triggers the lint | Cast to `Object` before interpolating: `'value=${flagValue as Object}'`. Safe immediately after a null check. |
+| 3 | Seed test always passed even when evaluator used key instead of seed | Used `weights: [1.0]` making bucket irrelevant — the test never actually verified the hash input | Use `computeBucket` with two configs sharing the same key but different seeds; assert the buckets differ for the same clientCode |
+| 4 | `mockito` and `build_runner` added to `dev_dependencies` | Reflex — CLAUDE.md prohibits `build_runner` and neither package was ever used | Use `FakeHttpClient extends http.BaseClient`, override `send()`. No code generation needed for HTTP testing. |
