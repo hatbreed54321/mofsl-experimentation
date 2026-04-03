@@ -184,7 +184,6 @@ Request: GET /api/v1/config?clientCode=AB1234&attributes={...}
 ```typescript
 interface EligibilityService {
   isEligible(clientCode: string, experimentId: string): Promise<boolean>;
-  getEligibleExperimentIds(clientCode: string): Promise<string[]>;
   bulkCheckEligibility(
     clientCode: string,
     experimentIds: string[]
@@ -243,8 +242,8 @@ await auditService.log({
     status: { old: 'draft', new: 'running' }
   },
   metadata: { reason: 'Experiment launched by PM' },
-  actorId: currentUser.id,
-  actorEmail: currentUser.email
+  actorId: null,                      // always null until Phase 8 SSO — no users table yet
+  actorEmail: currentUser.email       // authoritative actor field in all phases
 });
 ```
 
@@ -397,3 +396,29 @@ logger.info({
 - **Never skip audit logging** for any mutation — it's a hard requirement
 - **Never allow experiment key changes** after creation — it would re-shuffle all users
 - **Never validate variation weights only individually** — always validate that weights sum to 1.0 for the entire experiment
+- **Never set `actor_id` until Phase 8** — no `users` table rows exist yet; always pass `actorId: null` and use `actorEmail` as the authoritative actor field
+- **Never add `getEligibleExperimentIds` to EligibilityService** — it has no callers and forces every implementation to stub it; use `bulkCheckEligibility` in the config generator
+- **Never use DELETE with a body** — encode scope in the URL path instead (`DELETE /batches/:batchId`)
+- **Never construct services inside route handlers** — services are stateless pool wrappers; instantiate once at module scope and reuse
+- **Never call `start()` at module level in server.ts** — wrap with `if (require.main === module)`; export `app` separately so tests can import without binding a port
+
+---
+
+## Implementation Log — Mistakes & Learnings
+
+> See root `CLAUDE.md` for the full Phase 6 log. Key rules reproduced here for quick reference.
+
+### Phase 6 — Client Targeting Ingestion Pipeline
+
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `NODE_ENV=test` and `LOG_LEVEL=silent` rejected by Zod config schema | Only modelled production values | Always include `test` in `NODE_ENV` enum and `silent` in `LOG_LEVEL` enum |
+| 2 | `EADDRINUSE :3000` when tests imported `server.ts` | `start()` called at module level | Wrap `start()` with `if (require.main === module)`; export `app` separately |
+| 3 | Jest hung after tests passed | Singleton `pool` + `redis` kept connections open | Integration test `afterAll` must call `closePool()` + `closeRedis()` |
+| 4 | `actor_id` FK caused 500 in integration tests | FK references `users(id)` — no user rows exist until Phase 8 SSO | `actorId = null` always until Phase 8; `actorEmail` is the authoritative actor field |
+| 5 | `import 'dotenv/config'` must be first line | TypeScript hoists `import` statements — env vars not loaded before `config.ts` runs | `import 'dotenv/config'` must be the literal first line of `server.ts` and `test/setup.ts` |
+| 6 | bcrypt on every request collapses at 5K req/s | ~100ms per compare | Cache validated API key in Redis: `apikey:validated:{prefix}` → `{id, applicationId}`, TTL 5 min |
+| 7 | Dead exports forced every future implementation to stub them | Speculative exports (`getEligibleExperimentIds`, etc.) | Never export without a caller — removed from `EligibilityService` interface |
+| 8 | `new AuditService(pool)` constructed per request | Copy-paste inside route handler | Services are stateless pool wrappers — instantiate once at module scope |
+| 9 | Mixed-case client codes hit DB unique constraint | Dedup used uppercased key but pushed original-case value | When normalising for dedup, push the normalised form — must match exactly what gets stored in the DB |
+| 10 | `multer.MulterError` returned 500 | Error handler only checked `instanceof AppError` | Every middleware with typed errors needs a matching `instanceof` branch in `error-handler.middleware.ts` |
