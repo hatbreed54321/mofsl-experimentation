@@ -80,6 +80,9 @@ async function shutdown(signal: string): Promise<void> {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-start();
+// Only start the HTTP listener when this file is run directly (not when imported by tests)
+if (require.main === module) {
+  start();
+}
 
 export { app };

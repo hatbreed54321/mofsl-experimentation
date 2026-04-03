@@ -72,6 +72,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await testPool.end();
+  // Close app-level connections so Jest exits cleanly
+  const { closePool } = await import('../../src/db/postgres');
+  const { closeRedis } = await import('../../src/db/redis');
+  await closePool();
+  await closeRedis();
 });
 
 // ------------------------------------------------------------------

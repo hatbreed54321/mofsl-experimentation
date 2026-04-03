@@ -27,7 +27,9 @@ export class AuditService {
           entry.action,
           entry.changes ? JSON.stringify(entry.changes) : null,
           entry.metadata ? JSON.stringify(entry.metadata) : null,
-          entry.actorId ?? null,
+          // actor_id references users(id) — user rows don't exist until Phase 8 SSO.
+          // Track actor via actor_email (denormalized text) instead.
+          null,
           entry.actorEmail ?? null,
         ],
       );

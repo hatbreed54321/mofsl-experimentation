@@ -257,7 +257,9 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
         valid.length,
         duplicates.length,
         invalid.length,
-        userId,
+        // uploaded_by references users(id) — user rows don't exist until Phase 8 SSO.
+        // Track actor via audit_log.actor_email instead.
+        null,
       ],
     );
 
