@@ -1,8 +1,9 @@
 # MOFSL Internal A/B Testing Platform — Master Project Context
 
-> This document is the single source of truth for all decisions made during the planning phases of this project.
+> This document is the single source of truth for all decisions made during this project.
 > Paste this at the start of every new Claude chat session to restore full context.
 > Append new decisions to the relevant section as phases are completed.
+> **Current state: Phase 6 complete. Ready to plan Phase 7 — SDK Development.**
 
 ---
 
@@ -261,8 +262,8 @@ All ADRs are written and stored in `architecture/adr/`. Summary:
 - [x] Phase 3 — Feature Finalization
 - [x] Phase 4 — Architecture Design
 - [x] Phase 5 — CLAUDE.md & Skill Creation
-- [ ] Phase 6 — Client Targeting Ingestion Pipeline *(next)*
-- [ ] Phase 7 — SDK Development (Flutter)
+- [x] Phase 6 — Client Targeting Ingestion Pipeline
+- [ ] Phase 7 — SDK Development (Flutter) *(next)*
 - [ ] Phase 8 — Backend / Control Plane
 - [ ] Phase 9 — Data Plane & Stats Engine
 - [ ] Phase 10 — Internal Dashboard
@@ -365,7 +366,102 @@ mofsl-experimentation/
 
 ---
 
-## 14. Open Decisions / To Be Resolved in Phase 6+
+## 14. Phase 6 Outputs — Client Targeting Ingestion Pipeline
+
+### What Was Built
+
+The backend service (`/backend`) is a fully functional Node.js + TypeScript Express server with the eligibility ingestion pipeline working end-to-end. 43 tests (unit + integration) pass against real PostgreSQL and Redis via Docker.
+
+**Project scaffold:**
+```
+backend/
+├── src/
+│   ├── server.ts                          ← Express app, middleware, route mounting, graceful shutdown
+│   ├── config.ts                          ← Zod-validated env vars (DATABASE_URL, Redis, S3, JWT, etc.)
+│   ├── db/
+│   │   ├── postgres.ts                    ← pg Pool, withTransaction(fn), withTransactionOn(pool, fn)
+│   │   ├── redis.ts                       ← ioredis client, connectRedis(), closeRedis()
+│   │   ├── migrate.ts                     ← Migration runner (schema_migrations table)
+│   │   └── migrations/001_initial_schema.sql  ← Full PostgreSQL schema (16 tables)
+│   ├── services/
+│   │   ├── eligibility/
+│   │   │   ├── eligibility.interface.ts   ← EligibilityService: isEligible(), bulkCheckEligibility()
+│   │   │   └── file-upload.eligibility.ts ← Phase 1 impl: queries eligible_clients table
+│   │   ├── upload.service.ts              ← parseFile(), validateClientCodes(), processUpload()
+│   │   ├── audit.service.ts               ← Append-only audit log writer
+│   │   └── cache.service.ts               ← Redis cache ops (config, API key, idempotency)
+│   ├── routes/
+│   │   ├── eligibility.routes.ts          ← Upload, list, delete endpoints
+│   │   └── health.routes.ts               ← GET /health
+│   ├── middleware/
+│   │   ├── auth.middleware.ts             ← JWT validation (requireAuth)
+│   │   ├── api-key.middleware.ts          ← X-API-Key validation with Redis bcrypt cache
+│   │   └── error-handler.middleware.ts    ← Global handler (AppError, multer, Zod, generic 500)
+│   ├── validators/
+│   │   └── upload.validator.ts            ← uploadQuerySchema, listQuerySchema
+│   └── utils/
+│       ├── s3.ts                          ← uploadToS3() only (LocalStack-compatible)
+│       ├── errors.ts                      ← AppError, NotFoundError, ValidationError, PayloadTooLargeError
+│       └── logger.ts                      ← Pino structured JSON logger
+├── test/
+│   ├── setup.ts                           ← dotenv + test env defaults, LOG_LEVEL=silent
+│   ├── unit/
+│   │   ├── services/upload.validation.test.ts   ← 29 tests: CSV/Excel parsing, code validation
+│   │   └── services/file-upload.eligibility.test.ts ← isEligible, bulkCheckEligibility
+│   └── integration/
+│       └── eligibility.integration.test.ts      ← Full HTTP integration tests against real DB
+├── docker-compose.yml                     ← postgres:15, redis:7, localstack:3 (auto-creates S3 bucket)
+└── package.json
+```
+
+### API Endpoints Built
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/experiments/:id/eligible-clients/upload?mode=replace\|append` | Upload CSV/Excel file of client codes |
+| `GET` | `/api/v1/experiments/:id/eligible-clients` | List upload batches with cursor pagination |
+| `DELETE` | `/api/v1/experiments/:id/eligible-clients` | Clear all eligible clients for experiment |
+| `DELETE` | `/api/v1/experiments/:id/eligible-clients/batches/:batchId` | Remove one upload batch |
+| `GET` | `/health` | Health check |
+
+### Key Implementation Decisions Made in Phase 6
+
+| Decision | What was chosen | Why |
+|---|---|---|
+| `uploaded_by` and `actor_id` | Always `null` until Phase 8 | These are FKs to `users(id)` — no user rows exist until SSO is built |
+| Actor identity tracking | `actor_email` text column in `audit_log` | Denormalized text survives without the users FK; filled from JWT claims |
+| API key validation caching | bcrypt result cached in Redis `apikey:validated:{prefix}`, TTL 5 min | bcrypt is ~100ms; direct use would collapse at 5K req/s |
+| DELETE endpoint design | Sub-resource URL `/batches/:batchId` instead of DELETE-with-body | ALB and many proxies strip DELETE request bodies |
+| Transaction helpers | Two functions: `withTransaction(fn)` and `withTransactionOn(pool, fn)` | Services receive a `Pool` param (for test isolation) — `withTransactionOn` avoids runtime type-switching |
+| UUID generation in bulk insert | `gen_random_uuid()` in SQL `VALUES` clause | Avoids generating 1M UUIDs in Node.js per upload; param layout: `[$1…$n=codes, $n+1=experimentId, $n+2=uploadBatchId]` |
+| Client code normalisation | Stored as `UPPERCASE` | MOFSL client codes are case-insensitive; `AB1234` and `ab1234` are the same client |
+| Upload mode | Synchronous (blocking HTTP connection) | Known Phase 10 concern — for 1M-row files this holds the connection ~20s. `status` column exists for future async pattern |
+| Service instantiation | Module-level singletons in route files | Services are stateless pool wrappers; per-request `new AuditService(pool)` wastes GC |
+| dotenv load order | `import 'dotenv/config'` as literal first import | TypeScript hoists all `import` statements — a `require()` call runs after `config.ts` has already read `process.env` |
+
+### EligibilityService Interface (Final — Phase 6)
+
+```typescript
+interface EligibilityService {
+  // Returns true if experiment has no list (open to all) OR client is in the list
+  isEligible(clientCode: string, experimentId: string): Promise<boolean>;
+
+  // Batch-checks eligibility for multiple experiments in one SQL query
+  // Returns Map<experimentId, isEligible>
+  bulkCheckEligibility(clientCode: string, experimentIds: string[]): Promise<Map<string, boolean>>;
+}
+```
+
+Note: `getEligibleExperimentIds` was removed — it had no callers and would have forced every future implementation to stub it. The config generator will use `bulkCheckEligibility`.
+
+### Test Coverage
+
+- **29 unit tests** — CSV/Excel parsing (BOM, header detection, empty files, encoding), client code validation (alphanumeric rules, dedup, case-normalisation), eligibility service (open experiments, restricted experiments, bulk check)
+- **14 integration tests** — full HTTP round-trips against real PostgreSQL + Redis: upload replace/append, list pagination, delete batch, delete all, experiment-not-found 404, invalid file 400, oversized file 413
+
+---
+
+## 15. Open Decisions / To Be Resolved in Phase 7+
 
 - SDK package name and distribution method (pub.dev vs internal git package vs private Dart package server)
 - Internal product name for the platform (used in dashboard, docs, SDK package name)
@@ -379,4 +475,4 @@ mofsl-experimentation/
 
 ---
 
-*Last updated: Phase 5 complete. Ready for Phase 6 — Client Targeting Ingestion Pipeline (first implementation phase).*
+*Last updated: Phase 6 complete. Ready for Phase 7 — SDK Development (Flutter/Dart).*
