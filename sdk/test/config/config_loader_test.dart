@@ -195,15 +195,15 @@ void main() {
       );
     });
 
-    test('returns null for invalid JSON body', () async {
-      // Pre-populate cache so we know null means "no fallback" was hit.
+    test('falls back to cache for invalid JSON body', () async {
+      // Pre-populate cache so the loader has something to fall back to.
       fakeHttp.respondWith(ok(_validPayload));
       await loader.fetch();
       await Future<void>.delayed(Duration.zero);
 
       fakeHttp.respondWith(http.Response('not-json{{{', 200));
       final config = await loader.fetch();
-      // Falls back to cache.
+      // Parse failure → falls back to cached config (not null).
       expect(config, isNotNull);
       expect(config!.version, 'abc123');
     });

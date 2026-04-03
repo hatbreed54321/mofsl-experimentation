@@ -172,7 +172,8 @@ void main() {
     });
 
     test('clear() on empty cache is a no-op', () async {
-      expect(() async => cache.clear(), returnsNormally);
+      // If clear() throws on an empty cache, the test fails via the exception.
+      await cache.clear();
     });
   });
 }
