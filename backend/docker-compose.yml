@@ -1,0 +1,101 @@
+version: '3.9'
+
+# ============================================================
+# MOFSL Experimentation Platform — Local Development Stack
+#
+# Services:
+#   postgres  — PostgreSQL 15 (transactional DB)
+#   redis     — Redis 7 (config cache, idempotency keys)
+#   localstack — AWS LocalStack (S3 for CSV upload storage)
+#
+# Usage:
+#   docker-compose up -d          # start all services
+#   docker-compose down           # stop and remove containers
+#   docker-compose down -v        # also remove volumes (wipes data)
+#
+# After starting: run `npm run migrate` to apply the schema.
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # PostgreSQL 15 — transactional database
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: mofsl_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: experimentation
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: experimentation
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U experimentation -d experimentation"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mofsl_dev
+
+  # ----------------------------------------------------------
+  # Redis 7 — cache and idempotency key store
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: mofsl_redis
+    restart: unless-stopped
+    command: redis-server --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mofsl_dev
+
+  # ----------------------------------------------------------
+  # LocalStack — AWS S3 emulator for CSV upload storage
+  # ----------------------------------------------------------
+  localstack:
+    image: localstack/localstack:3
+    container_name: mofsl_localstack
+    restart: unless-stopped
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: ap-south-1
+      AWS_DEFAULT_REGION: ap-south-1
+      # Disable LocalStack telemetry
+      DISABLE_EVENTS: "1"
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      # Auto-create the S3 bucket on startup
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:4566/_localstack/health | grep -q '\"s3\": \"available\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - mofsl_dev
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  localstack_data:
+    driver: local
+
+networks:
+  mofsl_dev:
+    driver: bridge
