@@ -283,7 +283,8 @@ class MofslExperiment {
     // Try feature flag evaluation.
     final flagValue = _evaluator.evaluateFlag(key, config);
     if (flagValue != null) {
-      if (_debugMode) _logger.debug('Flag $key: value=$flagValue');
+      // Cast to Object before interpolation to satisfy avoid_dynamic_calls.
+      if (_debugMode) _logger.debug('Flag $key: value=${flagValue as Object}');
       return flagValue;
     }
 

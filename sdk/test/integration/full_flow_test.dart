@@ -56,7 +56,7 @@ class _FakeHttpClient extends http.BaseClient {
 //   This makes the assignment deterministic without needing to know the hash.
 //
 // Experiment "order_flow":
-//   weights [1.0, 0.0, 0.0] → ALL users get variation 0 (control = "v1").
+//   weights [1.0, 0.0] → ALL users get variation 0 (control = "v1").
 //
 // Feature flag "dark_mode": value = true.
 // ---------------------------------------------------------------------------
