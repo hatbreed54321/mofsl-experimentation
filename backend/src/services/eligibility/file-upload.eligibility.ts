@@ -35,32 +35,6 @@ export class FileUploadEligibilityService implements EligibilityService {
     return row.is_eligible;
   }
 
-  async getEligibleExperimentIds(clientCode: string): Promise<string[]> {
-    // Return experiments where:
-    //   (a) the experiment has no eligibility list (open to all), OR
-    //   (b) the client is explicitly listed
-    const result = await this.db.query<{ id: string }>(
-      `SELECT e.id
-       FROM experiments e
-       WHERE e.status IN ('running', 'paused')
-         AND (
-           -- No targeting list exists for this experiment
-           NOT EXISTS (
-             SELECT 1 FROM eligible_clients ec WHERE ec.experiment_id = e.id LIMIT 1
-           )
-           OR
-           -- Client is in the targeting list
-           EXISTS (
-             SELECT 1 FROM eligible_clients ec
-             WHERE ec.experiment_id = e.id AND ec.client_code = $1
-           )
-         )`,
-      [clientCode],
-    );
-
-    return result.rows.map((r) => r.id);
-  }
-
   async bulkCheckEligibility(
     clientCode: string,
     experimentIds: string[],

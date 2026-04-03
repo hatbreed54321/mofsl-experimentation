@@ -4,7 +4,7 @@ import { parse as parseCsvBuffer } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { Pool, PoolClient } from 'pg';
 
-import { withTransaction } from '../db/postgres';
+import { withTransactionOn } from '../db/postgres';
 import { uploadToS3 } from '../utils/s3';
 import { logger } from '../utils/logger';
 import { AppError, PayloadTooLargeError, ValidationError } from '../utils/errors';
@@ -167,15 +167,15 @@ async function bulkInsertEligibleClients(
   for (let i = 0; i < clientCodes.length; i += BATCH_SIZE) {
     const batch = clientCodes.slice(i, i + BATCH_SIZE);
 
-    // Build parameterised VALUES list: ($1,$2,$3), ($4,$5,$6), ...
+    // Use gen_random_uuid() in SQL — avoids generating N UUIDs in Node.js per batch.
+    // experimentId and uploadBatchId are constant per batch; pass each once at the end.
+    // Layout: ($1=code_0, $2=code_1, ..., $N=code_N-1, $N+1=experimentId, $N+2=uploadBatchId)
+    const n = batch.length;
     const valuePlaceholders = batch
-      .map((_, idx) => {
-        const base = idx * 4;
-        return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
-      })
+      .map((_, idx) => `(gen_random_uuid(), $${n + 1}, $${idx + 1}, $${n + 2})`)
       .join(', ');
 
-    const params = batch.flatMap((code) => [uuidv4(), experimentId, code, uploadBatchId]);
+    const params: unknown[] = [...batch, experimentId, uploadBatchId];
 
     await client.query(
       `INSERT INTO eligible_clients (id, experiment_id, client_code, upload_batch_id)
@@ -248,7 +248,7 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
   // --- Transactional DB writes ---
   const uploadBatchId = uuidv4();
 
-  const result = await withTransaction(db, async (client) => {
+  const result = await withTransactionOn(db, async (client) => {
     // Record upload metadata
     await client.query(
       `INSERT INTO client_list_uploads

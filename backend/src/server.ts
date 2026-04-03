@@ -1,8 +1,6 @@
-// Load .env file in non-production environments only.
-// In production (ECS), env vars are injected by the task definition.
-if (process.env['NODE_ENV'] !== 'production') {
-  require('dotenv').config();
-}
+// Load .env before any other imports — dotenv must run before config.ts reads env vars.
+// In production (ECS) there is no .env file, so this is a no-op.
+import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';

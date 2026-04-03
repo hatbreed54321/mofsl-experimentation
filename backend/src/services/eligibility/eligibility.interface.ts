@@ -21,12 +21,6 @@ export interface EligibilityService {
   isEligible(clientCode: string, experimentId: string): Promise<boolean>;
 
   /**
-   * Get all experiment IDs that a client is eligible for.
-   * Includes experiments with no eligibility list (open to all).
-   */
-  getEligibleExperimentIds(clientCode: string): Promise<string[]>;
-
-  /**
    * Efficiently check eligibility for multiple experiments in a single call.
    * Used by config generator to batch the eligibility check.
    *

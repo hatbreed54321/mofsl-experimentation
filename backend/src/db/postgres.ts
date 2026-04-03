@@ -31,22 +31,27 @@ export async function query<T extends Record<string, unknown>>(
 }
 
 /**
- * Run multiple operations in a transaction.
+ * Run multiple operations in a transaction using the singleton pool.
  * Automatically commits or rolls back.
- * Accepts an optional pool argument so callers can pass a test pool or a
- * different connection — defaults to the singleton pool.
  */
 export async function withTransaction<T>(
-  poolOrFn: Pool | ((client: PoolClient) => Promise<T>),
-  fn?: (client: PoolClient) => Promise<T>,
+  fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const targetPool = typeof poolOrFn === 'function' ? pool : poolOrFn;
-  const callback = typeof poolOrFn === 'function' ? poolOrFn : fn!;
+  return withTransactionOn(pool, fn);
+}
 
+/**
+ * Run multiple operations in a transaction using an explicit pool.
+ * Use this when you need a specific pool instance (e.g. test pool, different DB).
+ */
+export async function withTransactionOn<T>(
+  targetPool: Pool,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
   const client = await targetPool.connect();
   try {
     await client.query('BEGIN');
-    const result = await callback(client);
+    const result = await fn(client);
     await client.query('COMMIT');
     return result;
   } catch (err) {

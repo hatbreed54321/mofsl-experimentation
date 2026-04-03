@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { config } from '../config';
 
 function createS3Client(): S3Client {
@@ -31,23 +31,4 @@ export async function uploadToS3(key: string, body: Buffer, contentType: string)
       ServerSideEncryption: config.s3Endpoint ? undefined : 'AES256',
     }),
   );
-}
-
-export async function downloadFromS3(key: string): Promise<Buffer> {
-  const response = await s3Client.send(
-    new GetObjectCommand({
-      Bucket: config.s3Bucket,
-      Key: key,
-    }),
-  );
-
-  if (!response.Body) {
-    throw new Error(`S3 object '${key}' has no body`);
-  }
-
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
 }

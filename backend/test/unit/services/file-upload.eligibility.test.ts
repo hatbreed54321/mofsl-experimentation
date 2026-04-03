@@ -103,22 +103,3 @@ describe('FileUploadEligibilityService.bulkCheckEligibility', () => {
   });
 });
 
-describe('FileUploadEligibilityService.getEligibleExperimentIds', () => {
-  it('returns IDs of experiments the client is eligible for', async () => {
-    const pool = makePoolMock(async () => ({
-      rows: [{ id: 'exp-1' }, { id: 'exp-2' }],
-    }));
-    const svc = new FileUploadEligibilityService(pool);
-
-    const result = await svc.getEligibleExperimentIds('AB1234');
-    expect(result).toEqual(['exp-1', 'exp-2']);
-  });
-
-  it('returns an empty array when client has no eligible experiments', async () => {
-    const pool = makePoolMock(async () => ({ rows: [] }));
-    const svc = new FileUploadEligibilityService(pool);
-
-    const result = await svc.getEligibleExperimentIds('AB1234');
-    expect(result).toEqual([]);
-  });
-});
