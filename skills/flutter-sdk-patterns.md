@@ -380,6 +380,84 @@ test('handles network timeout — uses cache', () { ... });
 test('handles invalid JSON — uses cache', () { ... });
 ```
 
+### Async Testing — Critical Rules
+
+**Rule 1: Never use `returnsNormally` with async functions.**
+
+`returnsNormally` calls the function, sees that it returned a value (the `Future`) without throwing synchronously, and passes. It never inspects whether the Future completes successfully. The test always green-lights, even if the async operation throws.
+
+```dart
+// WRONG — always passes. The Future is silently discarded.
+test('clear() is a no-op on empty cache', () async {
+  expect(() async => cache.clear(), returnsNormally);
+});
+
+// CORRECT — if clear() rejects, the test fails via the unhandled exception.
+test('clear() is a no-op on empty cache', () async {
+  await cache.clear();
+});
+
+// CORRECT — explicit assertion using test package's async matcher.
+test('fetch completes without error', () async {
+  await expectLater(loader.fetch(), completes);
+});
+```
+
+**Rule 2: Test name must describe the assertion, not the input.**
+
+If a test exercises "invalid JSON body" but asserts that the result is not null (fallback to cache), the name must reflect what the code *does*, not what the input *is*.
+
+```dart
+// WRONG — name says "returns null" but assertion is isNotNull.
+test('returns null for invalid JSON body', () async {
+  ...
+  expect(config, isNotNull); // contradiction
+});
+
+// CORRECT — name matches the observable behavior being asserted.
+test('falls back to cache for invalid JSON body', () async {
+  ...
+  expect(config, isNotNull);
+});
+```
+
+**Rule 3: Use `FakeHttpClient extends http.BaseClient` — not mockito for HTTP.**
+
+Writing a fake client manually is simpler, compile-safe without build_runner, and more readable than generated mocks for HTTP testing.
+
+```dart
+class FakeHttpClient extends http.BaseClient {
+  http.Response Function(http.BaseRequest)? _responder;
+  Object? _throwError;
+  http.BaseRequest? lastRequest;
+
+  void respondWith(http.Response response) {
+    _throwError = null;
+    _responder = (_) => response;
+  }
+
+  void throwOnSend(Object error) {
+    _throwError = error;
+    _responder = null;
+  }
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    lastRequest = request;
+    final err = _throwError;
+    if (err != null) throw err;
+    final response = _responder!(request);
+    return http.StreamedResponse(
+      Stream.value(response.bodyBytes),
+      response.statusCode,
+      headers: response.headers,
+    );
+  }
+}
+```
+
+To simulate a `TimeoutException` (which `ConfigLoader.fetch()` catches separately), use `throwOnSend(TimeoutException('timed out'))` — this propagates through `.timeout()` unchanged and is caught by the `on TimeoutException` clause.
+
 ---
 
 ## Package Metadata (pubspec.yaml)

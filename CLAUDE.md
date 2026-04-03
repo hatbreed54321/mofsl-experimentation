@@ -274,3 +274,10 @@ For detailed information, read these files in order of relevance:
 | 17 | `config.ts` read env vars before dotenv loaded them | `require('dotenv').config()` call runs after TypeScript hoists all `import` statements | `import 'dotenv/config'` must be the literal first line of `server.ts` and `test/setup.ts` |
 | 18 | `uuidv4()` called per row — 1M allocations for 1M-row upload | Didn't use Postgres native UUID generation | Use `gen_random_uuid()` in SQL `VALUES`; pass codes + shared params as `[$1…$n, experimentId, uploadBatchId]` |
 | 19 | Dead exports (`downloadFromS3`, `deleteEligibleClientsBodySchema`, `getEligibleExperimentIds`) forced every future implementor to carry unused methods | Speculative "might need later" exports | Never export without a caller. Interface methods with no caller force every future implementation to stub them needlessly |
+
+### Phase 7A — SDK Foundation (package scaffold, config models, HTTP client, cache)
+
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `expect(() async => cache.clear(), returnsNormally)` always passed even when `clear()` would fail | `returnsNormally` only checks that calling the function doesn't throw *synchronously* — it receives the `Future` back and considers that a normal return. The Future's success or failure is never checked. | Never use `returnsNormally` with an async function. Use `await fn()` directly (an unhandled exception fails the test), or `await expectLater(fn(), completes)` when you want an explicit assertion. |
+| 2 | Test named "returns null for invalid JSON body" asserted `isNotNull` | Copy-paste of test name without updating it to match what the assertion actually checks | Test name must match the assertion. If the code falls back to cache (returns non-null), the test name must say "falls back to cache for …", not "returns null for …". Mismatched names make failures misleading. |
