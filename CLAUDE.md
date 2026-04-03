@@ -281,3 +281,12 @@ For detailed information, read these files in order of relevance:
 |---|---|---|---|
 | 1 | `expect(() async => cache.clear(), returnsNormally)` always passed even when `clear()` would fail | `returnsNormally` only checks that calling the function doesn't throw *synchronously* — it receives the `Future` back and considers that a normal return. The Future's success or failure is never checked. | Never use `returnsNormally` with an async function. Use `await fn()` directly (an unhandled exception fails the test), or `await expectLater(fn(), completes)` when you want an explicit assertion. |
 | 2 | Test named "returns null for invalid JSON body" asserted `isNotNull` | Copy-paste of test name without updating it to match what the assertion actually checks | Test name must match the assertion. If the code falls back to cache (returns non-null), the test name must say "falls back to cache for …", not "returns null for …". Mismatched names make failures misleading. |
+
+### Phase 7B — SDK Evaluation Engine & Public API
+
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `dart test` failed with `dart:ui not available on this platform` | `shared_preferences` → `shared_preferences_platform_interface` → `flutter` → `dart:ui`. Package was declared as pure Dart with no Flutter SDK constraint. | Any package using `shared_preferences` must declare `flutter: '>=3.0.0'` in environment, add `flutter: sdk: flutter` to dependencies, and run tests with `flutter test` — not `dart test`. |
+| 2 | `avoid_dynamic_calls` lint on `'Flag $key: value=$flagValue'` | String interpolation on a `dynamic` variable calls implicit `.toString()`, which triggers `avoid_dynamic_calls`. | Cast to `Object` before interpolating any `dynamic` value: `'value=${flagValue as Object}'`. Safe when a null-check immediately precedes the cast. |
+| 3 | Seed test was tautological — always passed even if evaluator used key instead of seed | Used `weights: [1.0]` making all users land on variation 0 regardless of hash; the test never actually exercised the hash input | When testing which field is used as hash input, use `computeBucket` with two configs sharing the same key but different seeds and assert different bucket values for the same clientCode. |
+| 4 | `mockito` and `build_runner` added to `dev_dependencies` | Reflex dependency addition at project setup; CLAUDE.md explicitly forbids `build_runner` | Never add `build_runner` or `mockito` to this SDK. Use `FakeHttpClient extends http.BaseClient` — override `send()` directly. No code generation needed. |
