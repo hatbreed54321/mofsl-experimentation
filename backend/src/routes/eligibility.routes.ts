@@ -11,11 +11,14 @@ import { AuditService } from '../services/audit.service';
 import { CacheService } from '../services/cache.service';
 import {
   uploadQuerySchema,
-  deleteEligibleClientsBodySchema,
   listQuerySchema,
 } from '../validators/upload.validator';
 
 export const eligibilityRouter = Router();
+
+// Shared service instances — instantiated once per process, not per request
+const auditService = new AuditService(pool);
+const cacheService = new CacheService(redis);
 
 // Multer: store file in memory (max 50 MB).
 // Files larger than MAX_ROWS rows will be caught in processUpload.
@@ -193,21 +196,72 @@ eligibilityRouter.get(
 
 // ------------------------------------------------------------------
 // DELETE /api/v1/experiments/:experimentId/eligible-clients
-// Remove eligible clients for an experiment.
-// Pass { uploadBatchId } to remove a specific batch, or omit to clear all.
+//   Clears ALL eligible clients for the experiment.
+//
+// DELETE /api/v1/experiments/:experimentId/eligible-clients/batches/:batchId
+//   Removes only the clients from a specific upload batch.
+//
+// Note: DELETE with a body is non-standard and stripped by some HTTP clients
+// and proxies. Batch deletion uses a sub-resource URL instead.
 // ------------------------------------------------------------------
+eligibilityRouter.delete(
+  '/experiments/:experimentId/eligible-clients/batches/:batchId',
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { experimentId, batchId: uploadBatchId } = req.params;
+
+      const expResult = await pool.query<{ id: string }>(
+        'SELECT id FROM experiments WHERE id = $1',
+        [experimentId],
+      );
+      if (expResult.rows.length === 0) {
+        throw new NotFoundError('Experiment', experimentId);
+      }
+
+      const result = await pool.query(
+        'DELETE FROM eligible_clients WHERE experiment_id = $1 AND upload_batch_id = $2',
+        [experimentId, uploadBatchId],
+      );
+      const deletedCount = result.rowCount ?? 0;
+
+      await pool.query(
+        `UPDATE client_list_uploads SET status = 'failed', error_message = 'Deleted by user'
+         WHERE id = $1`,
+        [uploadBatchId],
+      );
+
+      // (uses shared auditService instance)
+      await auditService.log({
+        entityType: 'eligible_clients',
+        entityId: experimentId,
+        action: 'deleted',
+        metadata: { uploadBatchId, deletedCount },
+        actorId: req.user?.id,
+        actorEmail: req.user?.email,
+      });
+
+      // (uses shared cacheService instance)
+      await cacheService.invalidateConfigsForExperiment(experimentId);
+
+      logger.info(
+        { event: 'eligible_clients_batch_deleted', experimentId, uploadBatchId, deletedCount, actor: req.user?.email },
+        'Eligible clients batch deleted',
+      );
+
+      res.json({ deletedCount });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 eligibilityRouter.delete(
   '/experiments/:experimentId/eligible-clients',
   requireAuth,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { experimentId } = req.params;
-
-      const bodyParsed = deleteEligibleClientsBodySchema.safeParse(req.body);
-      if (!bodyParsed.success) {
-        throw new ValidationError('Invalid request body');
-      }
-      const { uploadBatchId } = bodyParsed.data;
 
       // Verify experiment exists
       const expResult = await pool.query<{ id: string }>(
@@ -218,53 +272,28 @@ eligibilityRouter.delete(
         throw new NotFoundError('Experiment', experimentId);
       }
 
-      let deletedCount: number;
+      const result = await pool.query(
+        'DELETE FROM eligible_clients WHERE experiment_id = $1',
+        [experimentId],
+      );
+      const deletedCount = result.rowCount ?? 0;
 
-      if (uploadBatchId) {
-        const result = await pool.query(
-          'DELETE FROM eligible_clients WHERE experiment_id = $1 AND upload_batch_id = $2',
-          [experimentId, uploadBatchId],
-        );
-        deletedCount = result.rowCount ?? 0;
-
-        // Mark the upload record as deleted
-        await pool.query(
-          `UPDATE client_list_uploads SET status = 'failed', error_message = 'Deleted by user'
-           WHERE id = $1`,
-          [uploadBatchId],
-        );
-      } else {
-        const result = await pool.query(
-          'DELETE FROM eligible_clients WHERE experiment_id = $1',
-          [experimentId],
-        );
-        deletedCount = result.rowCount ?? 0;
-      }
-
-      // Audit log
-      const auditService = new AuditService(pool);
+      // (uses shared auditService instance)
       await auditService.log({
         entityType: 'eligible_clients',
         entityId: experimentId,
         action: 'deleted',
-        metadata: { uploadBatchId: uploadBatchId ?? 'all', deletedCount },
+        metadata: { scope: 'all', deletedCount },
         actorId: req.user?.id,
         actorEmail: req.user?.email,
       });
 
-      // Invalidate config cache
-      const cacheService = new CacheService(redis);
+      // (uses shared cacheService instance)
       await cacheService.invalidateConfigsForExperiment(experimentId);
 
       logger.info(
-        {
-          event: 'eligible_clients_deleted',
-          experimentId,
-          uploadBatchId: uploadBatchId ?? 'all',
-          deletedCount,
-          actor: req.user?.email,
-        },
-        'Eligible clients deleted',
+        { event: 'eligible_clients_cleared', experimentId, deletedCount, actor: req.user?.email },
+        'All eligible clients cleared for experiment',
       );
 
       res.json({ deletedCount });

@@ -4,6 +4,7 @@ import { parse as parseCsvBuffer } from 'csv-parse/sync';
 import * as XLSX from 'xlsx';
 import { Pool, PoolClient } from 'pg';
 
+import { withTransaction } from '../db/postgres';
 import { uploadToS3 } from '../utils/s3';
 import { logger } from '../utils/logger';
 import { AppError, PayloadTooLargeError, ValidationError } from '../utils/errors';
@@ -132,13 +133,17 @@ export function validateClientCodes(rawCodes: string[]): ValidationResult {
       continue;
     }
 
-    if (seen.has(code.toUpperCase())) {
+    // Normalise to uppercase for dedup — MOFSL client codes are case-insensitive
+    // identifiers (e.g. AB1234 and ab1234 are the same client). Store the
+    // normalised form so the DB unique constraint never sees false duplicates.
+    const normalised = code.toUpperCase();
+    if (seen.has(normalised)) {
       duplicates.push(code);
       continue;
     }
 
-    seen.add(code.toUpperCase());
-    valid.push(code);
+    seen.add(normalised);
+    valid.push(normalised);
   }
 
   return { valid, duplicates, invalid };
@@ -209,7 +214,8 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
     'Processing client list upload',
   );
 
-  // --- Size gate before any processing ---
+  // Parse the file first (we need row count to gate on MAX_ROWS).
+  // Byte-size is already gated upstream by multer (50 MB limit).
   const rawCodes = parseFile(file.buffer, file.originalname);
 
   if (rawCodes.length > MAX_ROWS) {
@@ -228,7 +234,10 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
   }
 
   // --- S3 upload (audit trail) ---
-  const s3Key = `uploads/${experimentId}/${Date.now()}_${file.originalname}`;
+  // Sanitize filename: replace any character that is not alphanumeric, dot, hyphen, or
+  // underscore with an underscore to produce a valid S3 key segment.
+  const safeFilename = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const s3Key = `uploads/${experimentId}/${Date.now()}_${safeFilename}`;
   await uploadToS3(s3Key, file.buffer, file.mimetype);
 
   logger.info(
@@ -239,7 +248,7 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
   // --- Transactional DB writes ---
   const uploadBatchId = uuidv4();
 
-  const result = await runInTransaction(db, async (client) => {
+  const result = await withTransaction(db, async (client) => {
     // Record upload metadata
     await client.query(
       `INSERT INTO client_list_uploads
@@ -326,21 +335,3 @@ export async function processUpload(options: ProcessUploadOptions): Promise<Uplo
   return result;
 }
 
-// ------------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------------
-
-async function runInTransaction<T>(db: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-}

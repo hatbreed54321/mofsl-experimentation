@@ -1,6 +1,7 @@
 import { ErrorRequestHandler } from 'express';
 import { ZodError } from 'zod';
-import { AppError, ValidationError } from '../utils/errors';
+import multer from 'multer';
+import { AppError, ValidationError, PayloadTooLargeError } from '../utils/errors';
 import { logger } from '../utils/logger';
 
 /**
@@ -13,6 +14,17 @@ import { logger } from '../utils/logger';
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  // Multer errors (file too large, wrong type) — map to proper HTTP codes
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      const mapped = new PayloadTooLargeError('File exceeds the maximum allowed size of 50 MB');
+      res.status(mapped.statusCode).json({ error: mapped.errorCode, message: mapped.message });
+      return;
+    }
+    res.status(400).json({ error: 'bad_request', message: err.message });
+    return;
+  }
+
   if (err instanceof ValidationError) {
     res.status(err.statusCode).json({
       error: err.errorCode,

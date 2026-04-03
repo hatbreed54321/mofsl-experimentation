@@ -36,11 +36,16 @@ export class CacheService {
   }
 
   /**
-   * Invalidate all cached configs for clients in a given experiment.
+   * Invalidate all cached configs when eligibility changes for an experiment.
    *
-   * In Phase 1 this is done by pattern-scanning the key space.
-   * At scale (Phase 2) we'd maintain a set of active clientCodes per experiment.
-   * For now, flush all config keys when eligibility changes — safe but broad.
+   * Current approach: SCAN config:v1:* and delete all matching keys.
+   * This is O(n) where n = number of cached client configs. At 100K concurrent
+   * clients this scans 100K keys — acceptable for Phase 1 (uploads are infrequent,
+   * not on the hot path).
+   *
+   * TODO Phase 2: maintain a Redis Set per experiment of active client codes
+   * (exp:clients:{experimentId} → Set<clientCode>) so we can invalidate only
+   * the affected configs in O(m) where m = eligible list size.
    */
   async invalidateConfigsForExperiment(experimentId: string): Promise<void> {
     try {

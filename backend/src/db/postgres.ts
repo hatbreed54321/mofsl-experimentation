@@ -33,14 +33,20 @@ export async function query<T extends Record<string, unknown>>(
 /**
  * Run multiple operations in a transaction.
  * Automatically commits or rolls back.
+ * Accepts an optional pool argument so callers can pass a test pool or a
+ * different connection — defaults to the singleton pool.
  */
 export async function withTransaction<T>(
-  fn: (client: PoolClient) => Promise<T>,
+  poolOrFn: Pool | ((client: PoolClient) => Promise<T>),
+  fn?: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  const client = await pool.connect();
+  const targetPool = typeof poolOrFn === 'function' ? pool : poolOrFn;
+  const callback = typeof poolOrFn === 'function' ? poolOrFn : fn!;
+
+  const client = await targetPool.connect();
   try {
     await client.query('BEGIN');
-    const result = await fn(client);
+    const result = await callback(client);
     await client.query('COMMIT');
     return result;
   } catch (err) {

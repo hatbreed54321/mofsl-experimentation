@@ -32,6 +32,8 @@ const config: Config = {
   // Integration tests require running docker-compose services
   // Run: docker-compose up -d before running integration tests
   testTimeout: 30000,
+  // forceExit ensures Jest exits even if a test leaves open handles (e.g. DB pool)
+  forceExit: true,
   setupFiles: ['<rootDir>/test/setup.ts'],
 };
 
