@@ -5,11 +5,16 @@ repository: https://github.com/mofsl/experimentation-platform
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
+  flutter: '>=3.0.0'
 
 dependencies:
+  flutter:
+    sdk: flutter
   http: ^1.1.0
   shared_preferences: ^2.2.0
 
 dev_dependencies:
+  flutter_test:
+    sdk: flutter
   test: ^1.24.0
   lints: ^3.0.0
