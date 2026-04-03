@@ -6,8 +6,6 @@
 /// ```
 library mofsl_experiment;
 
-export 'src/models/experiment.dart';
-export 'src/models/feature_flag.dart';
-export 'src/models/sdk_config.dart';
-export 'src/models/variation.dart';
-export 'src/utils/version.dart';
+export 'src/client.dart' show MofslExperiment;
+export 'src/models/experiment.dart' show Experiment;
+export 'src/models/variation.dart' show Variation;
