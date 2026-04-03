@@ -3,7 +3,7 @@
 > This document is the single source of truth for all decisions made during this project.
 > Paste this at the start of every new Claude chat session to restore full context.
 > Append new decisions to the relevant section as phases are completed.
-> **Current state: Phase 7A complete. Phase 7B (evaluation engine + exposure tracker + client) is next.**
+> **Current state: Phase 7 complete (7A + 7B). 140 tests passing. Phase 8 (Backend / Control Plane) is next.**
 
 ---
 
@@ -263,8 +263,9 @@ All ADRs are written and stored in `architecture/adr/`. Summary:
 - [x] Phase 4 — Architecture Design
 - [x] Phase 5 — CLAUDE.md & Skill Creation
 - [x] Phase 6 — Client Targeting Ingestion Pipeline
-- [~] Phase 7 — SDK Development (Flutter) — 7A complete, 7B next
+- [x] Phase 7 — SDK Development (Flutter) — complete
   - [x] Phase 7A — Package scaffold, data models, config cache, config loader, logger, version, tests (27 test cases)
+  - [x] Phase 7B — MurmurHash3, bucket mapper, evaluator, exposure tracker, MofslExperiment client, full test suite (113 test cases)
 - [ ] Phase 8 — Backend / Control Plane
 - [ ] Phase 9 — Data Plane & Stats Engine
 - [ ] Phase 10 — Internal Dashboard
@@ -497,18 +498,37 @@ Note: `getEligibleExperimentIds` was removed — it had no callers and would hav
 - `unawaited(_cache.save(...))` — cache write never blocks the fetch return path
 - `TimeoutException` caught separately from general `Exception` so the log message is specific
 
-### What 7B must implement (evaluation + exposure + client)
-- `lib/src/evaluation/hasher.dart` — MurmurHash3 x86 32-bit, pure Dart, 32-bit overflow via `& 0xFFFFFFFF`
-- `lib/src/evaluation/bucket_mapper.dart` — cumulative weight walk to map bucket → `Variation`
-- `lib/src/evaluation/evaluator.dart` — full 7-step algorithm from `CONFIG_SERVER_API.md` Section 3
-- `lib/src/exposure/exposure_tracker.dart` — dedup `Set<String>`, fires callback, tracks per-session
-- `lib/src/client.dart` — `MofslExperiment` class: static `initialize()`, `getBool/String/Int/JSON()`, `refresh()`, `dispose()`
-- `lib/mofsl_experiment.dart` — add `MofslExperiment` export
+### What 7B built (evaluation + exposure + client) — COMPLETE
 
-### Phase 7B test coverage required
-- Hasher: known-input → known-hash vectors; chi-square uniformity over 100K inputs
-- Evaluator: forced variation, paused experiment, coverage exclusion, each variation band, missing experiment, flag evaluation
-- Exposure tracker: dedup (second call no-op), forced variation no fire, coverage exclusion no fire
-- Client: full `initialize()` lifecycle, `getBool/String/Int/JSON` with defaults, `dispose()` cancels timer
+All files in `sdk/lib/src/`:
 
-*Last updated: Phase 7A complete. Ready for Phase 7B — evaluation engine, exposure tracker, MofslExperiment client.*
+- `evaluation/hasher.dart` — MurmurHash3 x86 32-bit. All intermediates masked with `& 0xFFFFFFFF`. `_multiply32` uses 16-bit split trick. Tail uses if-chains (no switch fallthrough in Dart 3). `murmurhash3('') == 0`.
+- `evaluation/bucket_mapper.dart` — `mapBucket(bucket, coverage, weights)`. Coverage check: `bucket >= coverage * 10000 → null`. Cumulative weight walk: `cumulative += weight * 10000; if bucket < cumulative → return index`.
+- `evaluation/evaluator.dart` — Stateless `const Evaluator()`. `evaluateExperiment` follows 6-step algorithm. Hash input: `experiment.seed + ":" + clientCode` (seed, NOT key). `evaluateFlag` returns flag value or null. `computeBucket` helper for debug logging.
+- `exposure/exposure_tracker.dart` — `Set<String> _firedExposures`. Null callback does NOT mark experiment as fired (allows later real callback). `reset()` clears state.
+- `client.dart` — `MofslExperiment` with `static Future<MofslExperiment> initialize(...)`. Cache-first init (background fetch if cached, awaited if not). `getBool/getString/getInt/getJSON` sync, try-catch, return defaultValue. `dispose()` cancels timer + resets tracker + closes http client. `httpClientOverride` param for test injection.
+- `mofsl_experiment.dart` barrel — exports only `MofslExperiment`, `Experiment`, `Variation`.
+
+### Key design decisions locked in 7B
+- `forcedVariations` merged at client level: `{...config.forcedVariations, ...sdkLevel}` — SDK wins
+- Exposure NOT fired for forced variations; client checks `merged.containsKey(key)` before calling tracker
+- Feature flag evaluated only if experiment returns null — prevents false exposure fires
+- pubspec declares `flutter: sdk: flutter` and `flutter_test: sdk: flutter` — required because `shared_preferences` depends on `dart:ui`; tests run with `flutter test`, not `dart test`
+
+### Phase 7B test results — 113 tests, all passing
+- `test/evaluation/hasher_test.dart` — determinism, range, chi-square (100K inputs, 10K buckets, χ² < 10090), stddev, byte-boundary (1–5 bytes), empty string → 0
+- `test/evaluation/bucket_mapper_test.dart` — 0%/50%/80%/100% coverage, 50-50/33-33-34/zero-weight splits
+- `test/evaluation/evaluator_test.dart` — all branches; seed test uses `computeBucket` with same key + different seeds to assert different buckets (proves seed, not key, is hashed)
+- `test/exposure/exposure_tracker_test.dart` — first fires, second doesn't, multi-exp independence, null callback (doesn't mark fired), reset
+- `test/client_test.dart` — typed getter values + type fallback, exposure once, no exposure for flags/forced, dispose, refresh
+- `test/integration/full_flow_test.dart` — full lifecycle: init → eval → exposure once → no re-fire → flag eval → paused/missing defaults → dispose → network-fail fallback
+
+### Implementation mistakes & lessons from Phase 7 (append to CLAUDE.md log)
+| # | What broke | Root cause | Rule |
+|---|---|---|---|
+| 1 | `returnsNormally` with async function always passed | `returnsNormally` only checks synchronous throw; the Future's failure is never observed | Never use `returnsNormally` with async functions — use `await fn()` directly or `await expectLater(fn(), completes)` |
+| 2 | Test name said "returns null" but assertion was `isNotNull` | Copy-paste | Test name must match assertion exactly |
+| 3 | `dart test` failed with `dart:ui` not available | `shared_preferences` → Flutter → `dart:ui`; package was declared as pure Dart | Any package using `shared_preferences` must declare `flutter: sdk: flutter` and run tests with `flutter test` |
+| 4 | `avoid_dynamic_calls` lint on `$flagValue` interpolation | String interpolation on `dynamic` calls implicit `.toString()` which triggers the lint | Cast to `Object` before interpolating dynamic values: `${flagValue as Object}` |
+
+*Last updated: Phase 7 complete (7A + 7B). 140 tests passing. Ready for Phase 8 — Backend / Control Plane.*
